@@ -12,25 +12,20 @@ mxkbd - modular X key bind daemon - daemon to add, list, remove, and set keybind
 
 # OPTIONS
 
-**-S,\--socket ***PATH*
+**-S,--socket** *PATH*
+Set this daemon's socket file to *PATH.* Default socket file path is \~/.config/mxkbd/mxkbd.socket
 
-:   Set this daemon\'s socket file to *PATH.* Default socket file path is \~/.config/mxkbd/mxkbd.socket
+**-d,--default** *MODE*
+Set this daemon's default mode to *MODE.*
 
-**-d,\--default ***MODE*
+**-g,--grabbed** *MODE*
+Set this daemon's grabbed mode to *MODE.*
 
-:   Set this daemon\'s default mode to *MODE.*
+**-s,--selected** *MODE*
+Set this daemon's selected mode to *MODE.*
 
-**-g,\--grabbed ***MODE*
-
-:   Set this daemon\'s grabbed mode to *MODE.*
-
-**-s,\--selected ***MODE*
-
-:   Set this daemon\'s selected mode to *MODE.*
-
-**-D,\--deletefile**
-
-:   if set and socket file exists but is not an actual socket file then delete the file and recreate it as a socket, otherwise exit
+**-D,--deletefile**
+if set and socket file exists but is not an actual socket file then delete the file and recreate it as a socket, otherwise exit
 
 # NOTE
 
