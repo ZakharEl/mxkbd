@@ -13,6 +13,10 @@
 #include <csignal> //signal
 #include <poll.h> //poll, POLLIN, pollfd
 #include <vector>
+#include <xcb/xcb.h> //xcb_connection_t type, xcb_setup_t type, xcb_get_setup - requires -l xcb option
+#include <xcb/xcb_keysyms.h> //xcb_key_symbols_t type, xcb_key_symbols_alloc, xcb_key_symbols_free, xcb_key_symbols_get_keysym - requires -l xcb option - also requires may require - xcb-keysyms option with the use of some variables, functions, etc
+#include <X11/Xlib.h> //XStringToKeysym, NoSymbol - requires -l X11 option
+#include <xcb/xcb_aux.h> //xcb_aux_get_screen - requires -l xcb-util option
 
 //stands for modular X key bind daemon
 
@@ -21,14 +25,155 @@ bool delete_file = false; //whether to delete non directory files of the path of
 struct sockaddr_un sock;
 int sockfd;
 int clientfd;
+int xcb_fd;
 std::string socket_string("");
+xcb_connection_t *xcb_conn;
+xcb_window_t root_window;
+
+bool get_keycode_from_keysym(const unsigned int keysym, unsigned char &outside_keycode) { //might need to replace keysym's unsigned int type with xcb_keysym_t to compile on some architectures
+	const xcb_setup_t *setup = xcb_get_setup(xcb_conn);
+	if(setup != NULL) {
+		xcb_key_symbols_t *symbols = xcb_key_symbols_alloc(xcb_conn); //requires -l xcb-keysyms - otherwise throws undefined reference error
+		unsigned char max_kc = setup->max_keycode; //might need to replace max_kc's unsigned char type with xcb_keycode_t to compile on some architectures
+		unsigned char kc = setup->min_keycode - 1;
+		do {
+			kc++;
+			for(unsigned char col = 0; col < 4; col++) {
+				unsigned int ks = xcb_key_symbols_get_keysym(symbols, kc, col);
+				if (ks == keysym) {
+					xcb_key_symbols_free(symbols);
+					outside_keycode = kc;
+					return true;
+				}
+			}
+		} while(kc != max_kc);
+		xcb_key_symbols_free(symbols);
+	}
+	return false;
+}
+
+bool get_keycode_from_string(std::string key, unsigned char &outside_keycode) {
+	const unsigned int keysym = XStringToKeysym(key.c_str()); //may need to be unsigned long (or x11 lib's KeySym type) as usigned int and unsigned long are not of the same length on all platforms
+	if (keysym == NoSymbol) {
+		return false;
+	}
+	return get_keycode_from_keysym(keysym, outside_keycode);
+}
+
+bool get_modifier_from_keycode(const unsigned char outside_keycode, unsigned short &mod) {
+	bool success = false;
+	xcb_get_modifier_mapping_reply_t *mod_mapping_reply = NULL;
+	mod_mapping_reply = xcb_get_modifier_mapping_reply(xcb_conn, xcb_get_modifier_mapping(xcb_conn), NULL);
+	if(mod_mapping_reply != NULL) {
+		unsigned char kpm = mod_mapping_reply->keycodes_per_modifier;
+		if(kpm > 0) {
+			unsigned char *mod_keycodes = NULL;
+			mod_keycodes = xcb_get_modifier_mapping_keycodes(mod_mapping_reply);
+			if(mod_keycodes != NULL) {
+				unsigned int num_of_mods = xcb_get_modifier_mapping_keycodes_length(mod_mapping_reply);
+				for(unsigned int i = 0; i < num_of_mods; i++) {
+					for(unsigned int j = 0; j < kpm; j++) {
+						unsigned char mod_keycode = mod_keycodes[i * kpm + j];
+						if(mod_keycode == NoSymbol) {
+							continue;
+						}
+						if(mod_keycode == outside_keycode) {
+							mod |= (1 << i);
+							success  = true;
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
+	free(mod_mapping_reply);
+	return success;
+}
+
+bool get_modifier_from_raw_keysym_string(std::string key, unsigned short &mod) {
+	unsigned char mod_keycode;
+	if(get_keycode_from_string(key, mod_keycode)) {
+		return get_modifier_from_keycode(mod_keycode, mod);
+	}
+	return false;
+}
+
+bool get_modifier_from_string(std::string key, unsigned short &mod) {
+	if (key.compare("shift") == 0) {
+		mod |= XCB_MOD_MASK_SHIFT;
+		return true;
+	}
+	else if (key.compare("control") == 0 || key.compare("ctrl") == 0) {
+		mod |= XCB_MOD_MASK_CONTROL;
+		return true;
+	}
+	else if(key.compare("alt") == 0) {
+		bool there_is_a_alt = get_modifier_from_raw_keysym_string("Alt_L", mod);
+		return get_modifier_from_raw_keysym_string("Alt_R", mod) || there_is_a_alt;
+	}
+	else if (key.compare("mod1") == 0) {
+		mod |= XCB_MOD_MASK_1;
+		return true;
+	}
+	else if (key.compare("mod2") == 0) {
+		mod |= XCB_MOD_MASK_2;
+		return true;
+	}
+	else if (key.compare("mod3") == 0) {
+		mod |= XCB_MOD_MASK_3;
+		return true;
+	}
+	else if (key.compare("mod4") == 0) {
+		mod |= XCB_MOD_MASK_4;
+		return true;
+	}
+	else if (key.compare("mod5") == 0) {
+		mod |= XCB_MOD_MASK_5;
+		return true;
+	}
+	else if (key.compare("lock") == 0) {
+		mod |= XCB_MOD_MASK_LOCK;
+		return true;
+	}
+	else if (key.compare("any") == 0) {
+		mod |= XCB_MOD_MASK_ANY;
+		return true;
+	}
+	return false;
+}
 
 class keybind_grab {
 	public:
-		unsigned short modifiers;
+		unsigned short mods;
 		unsigned char keycode;
+		bool is_key_release;
+		keybind_grab(std::stringstream &seq, bool &success) {
+			mods = 0;
+			keycode = 0;
+			is_key_release = false;
+			std::string keysym_string;
+			while(getline(seq, keysym_string, '+')) {
+				if(!get_modifier_from_string(keysym_string, mods)) {
+					break;
+				}
+			}
+			if(getline(seq, keysym_string, '+')) {
+				if(keysym_string[0] == '@') {
+					is_key_release = true;
+					keysym_string.erase(0, 1);
+				}
+				success = get_keycode_from_string(keysym_string, keycode);
+			}
+			else {
+				success = false;
+			}
+		}
+		bool operator==(keybind_grab g) {
+			return mods == g.mods && keycode == g.keycode && is_key_release == g.is_key_release;
+		}
 };
-std::vector<keybind_grab> grabbed_keys_n_modifiers;
+std::vector<keybind_grab *> grabbed_keys_n_modifiers;
 
 class keybind_bind {
 	public:
@@ -99,6 +244,8 @@ class keybind_mode {
 			}
 			keybind_searched_for = new keybind_bind(seq, command);
 			keybinds.push_back(keybind_searched_for);
+			if(grabbed_keybind_mode == this) {
+			}
 			return true;
 		}
 };
@@ -748,6 +895,14 @@ bool list_operation(std::stringstream &p) {
 	return true;
 }
 
+void setup_xcb() {
+	int conn_screen;
+	xcb_conn = xcb_connect(NULL, &conn_screen);
+	xcb_screen_t *root_screen = xcb_aux_get_screen(xcb_conn, conn_screen);
+	root_window = root_screen->root;
+	xcb_fd = xcb_get_file_descriptor(xcb_conn);
+}
+
 int main(int argc, char *argv[]) {
 	exit_if_mxkbd_already_running();
 	{
@@ -803,6 +958,7 @@ int main(int argc, char *argv[]) {
 	signal(SIGHUP, just_exit_normally);
 	signal(SIGTERM, just_exit_normally);
 	struct pollfd socket_poll[1] = {{sockfd, POLLIN, 0}};
+	setup_xcb();
 	while(poll(socket_poll, 1, -1) > 0) {
 		clientfd = accept(sockfd, NULL, NULL);
 		std::stringstream client_message = read_from_socket();

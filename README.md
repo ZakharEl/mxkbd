@@ -4,11 +4,22 @@ mxkbd - modular X key bind daemon - daemon to add, list, remove, and set keybind
 
 # SYNOPSIS
 
-**mxkbd** \[*OPTION*\]
+**mxkbd** [*OPTION*]
 
 # DESCRIPTION
 
-**mxkbd** is a server or daemon that allows commands be bound to key sequences (keybinds) within modes. When the key sequence within the grabbed keybind mode is pressed its (the keybind\'s) command will execute. Many modes can exist at one time but only the mode currently set to be the grabbed mode will have its keybinds watched for. Furthermore, only one mode can be set to be the grabbed mode at a time, however, the grabbed mode can be switched out to any other mode at any time as requested. By default new keybinds will be added and removed from the mode set to be the selected mode. This is to make it possible to add keybinds to one mode with key sequences of another mode. Like the grabbed mode only one mode can be set to be the selected mode. **mxkbd** needs a client program to send the appropriate requests to add, remove, list and set keybinds and modes to this daemon\'s socket file
+**mxkbd** is a server or daemon that allows commands be bound to key sequences (keybinds) within modes. When the key sequence within the grabbed keybind mode is pressed its (the keybind\'s) command will execute. Many modes can exist at one time but only the mode currently set to be the grabbed mode will have its keybinds watched for. Furthermore, only one mode can be set to be the grabbed mode at a time, however, the grabbed mode can be switched out to any other mode at any time as requested. By default new keybinds will be added and removed from the mode set to be the selected mode. This is to make it possible to add keybinds to one mode with key sequences of another mode. Like the grabbed mode only one mode can be set to be the selected mode. **mxkbd** needs a client program to send the appropriate requests to add, remove, list and set keybinds and modes to this daemon\'s socket file. One such client is [https://github.com/ZakharEl/mxkbc](https://github.com/ZakharEl/mxkbc).
+
+# INSTALLATION
+
+Open a terminal and run
+```sh
+git clone https://github.com/ZakharEl/mxkbd
+```
+. Then **cd** into the clone directory and run
+```sh
+sudo make install
+```
 
 # OPTIONS
 
