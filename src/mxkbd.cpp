@@ -654,7 +654,7 @@ bool remove_operation(std::stringstream &p) {
 	if(!(is_option_parse_string(p, std::string("r")) || is_option_parse_string(p, std::string("remove")))) {
 		return false;
 	}
-	keybind_mode *remove_operation_mode = NULL;
+	keybind_mode *remove_operation_mode = selected_keybind_mode;
 	std::string prop_of_mode_or_keybind = "";
 	int l = -1;
 	if(is_option_parse_string(p, std::string("-g"))) {
@@ -662,7 +662,6 @@ bool remove_operation(std::stringstream &p) {
 		goto set_prop_of_mode_or_keybind;
 	}
 	else if(is_option_parse_string(p, std::string("-s"))) {
-		remove_operation_mode  = selected_keybind_mode;
 		goto set_prop_of_mode_or_keybind;
 	}
 	else if(is_option_parse_string(p, std::string("-d"))) {
