@@ -29,6 +29,7 @@ int xcb_fd;
 std::string socket_string("");
 xcb_connection_t *xcb_conn;
 xcb_window_t root_window;
+bool chained = false;
 
 bool get_keycode_from_keysym(const unsigned int keysym, unsigned char &outside_keycode) { //might need to replace keysym's unsigned int type with xcb_keysym_t to compile on some architectures
 	const xcb_setup_t *setup = xcb_get_setup(xcb_conn);
@@ -148,29 +149,31 @@ class keybind_grab {
 		unsigned short mods;
 		unsigned char keycode;
 		bool is_key_release;
-		keybind_grab(std::stringstream &seq, bool &success) {
+		bool setup(std::stringstream &seq) {
 			mods = 0;
-			keycode = 0;
 			is_key_release = false;
-			std::string keysym_string;
+			std::string keysym_string = "";
 			while(getline(seq, keysym_string, '+')) {
 				if(!get_modifier_from_string(keysym_string, mods)) {
 					break;
 				}
 			}
-			if(getline(seq, keysym_string, '+')) {
+			if(keysym_string.empty()) {
+				return false;
+			}
+			else {
 				if(keysym_string[0] == '@') {
 					is_key_release = true;
 					keysym_string.erase(0, 1);
 				}
-				success = get_keycode_from_string(keysym_string, keycode);
-			}
-			else {
-				success = false;
+				return get_keycode_from_string(keysym_string, keycode);
 			}
 		}
-		bool operator==(keybind_grab g) {
-			return mods == g.mods && keycode == g.keycode && is_key_release == g.is_key_release;
+		keybind_grab(std::stringstream &seq, bool &success) {
+			success = setup(seq);
+		}
+		bool operator==(keybind_grab &g) {
+			return mods == g.mods && keycode == g.keycode;
 		}
 };
 std::vector<keybind_grab *> grabbed_keys_n_modifiers;
@@ -181,20 +184,93 @@ class keybind_bind {
 		std::string description;
 		std::string command;
 		keybind_grab *grabbed_key_n_modifiers;
-		keybind_bind(std::string bind_seq, std::string bind_command) {
-			seq.clear();
-			seq.str(bind_seq);
+		bool setup(std::string bind_seq, std::string bind_command) {
 			command = bind_command;
 			grabbed_key_n_modifiers = NULL;
+			seq.clear();
+			seq.str(bind_seq);
+			bool success;
+			keybind_grab grab_test(seq, success);
+			if(!success) {
+				return false;
+			}
+			while(grab_test.setup(seq)) {
+			}
+			if(!seq.eof()) {
+				return false;
+			}
+			if(grab_test.mods != 0) {
+				return false;
+			}
+			seq.clear();
+			seq.seekg(0);
+			return true;
 		}
-		keybind_bind(std::string bind_seq, std::string bind_command, std::string bind_description) {
-			seq.clear();
-			seq.str(bind_seq);
-			command = bind_command;
+		bool setup(std::string bind_seq, std::string bind_command, std::string bind_description) {
 			description = bind_description;
-			grabbed_key_n_modifiers = NULL;
+			return setup(bind_seq, bind_command);
+		}
+		keybind_bind(std::string bind_seq, std::string bind_command, bool &success) {
+			success = setup(bind_seq, bind_command);
+		}
+		keybind_bind(std::string bind_seq, std::string bind_command, std::string bind_description, bool &success) {
+			success = setup(bind_seq, bind_command, bind_description);
+		}
+		bool operator==(keybind_bind &o) {
+			std::streampos o_seg_pos = o.seq.tellg();
+			o.seq.seekg(0);
+			std::streampos t_seg_pos = seq.tellg();
+			seq.seekg(0);
+			bool success;
+			keybind_grab o_grab(o.seq, success);
+			keybind_grab t_grab(seq, success);
+			if(!(t_grab == o_grab)) {
+				o.seq.clear();
+				seq.clear();
+				o.seq.seekg(o_seg_pos);
+				seq.seekg(t_seg_pos);
+				return false;
+			}
+			while(o_grab.setup(o.seq) && t_grab.setup(seq)) {
+				if(!(t_grab == o_grab)) {
+					o.seq.clear();
+					seq.clear();
+					o.seq.seekg(o_seg_pos);
+					seq.seekg(t_seg_pos);
+					return false;
+				}
+			}
+			o.seq.clear();
+			seq.clear();
+			o.seq.seekg(o_seg_pos);
+			seq.seekg(t_seg_pos);
+			return true;
 		}
 };
+
+bool get_keybind_grab_from_grabbed_keys_n_modifiers(keybind_grab *&comparision_grab, keybind_grab *&grab_searched_for) {
+	for(keybind_grab *grab: grabbed_keys_n_modifiers) {
+		if((*grab) == (*comparision_grab)) {
+			grab_searched_for = grab;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool add_keybind_grab(std::stringstream &seq, keybind_grab *&grab_searched_for) {
+	bool success;
+	keybind_grab *grab_from_seq = new keybind_grab(seq, success);
+	if((!success) || get_keybind_grab_from_grabbed_keys_n_modifiers(grab_from_seq, grab_searched_for)) {
+		delete grab_from_seq;
+		return false;
+	}
+	grab_searched_for = grab_from_seq;
+	grabbed_keys_n_modifiers.push_back(grab_from_seq);
+	xcb_grab_key(xcb_conn, false, root_window, grab_from_seq->mods, grab_from_seq->keycode, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_SYNC);
+	xcb_flush(xcb_conn); //may or may not need this line
+	return true;
+}
 
 class keybind_mode;
 keybind_mode *default_keybind_mode = NULL; //mode to set the 2 below to if the mode being deleted is one of them
@@ -224,9 +300,14 @@ class keybind_mode {
 			}
 		}
 		bool get_keybind_from_keybinds(std::string seq, keybind_bind *&keybind_searched_for, int &l) {
+			bool success;
+			keybind_bind keybind_test(seq, std::string("just a test"), success);
+			if(!success) {
+				return false;
+			}
 			for(int i = 0; i < (int) keybinds.size(); i++) {
 				keybind_bind *keybind = keybinds.at(i);
-				if(keybind->seq.str().compare(seq) == 0) {
+				if((*keybind) == keybind_test) {
 					keybind_searched_for = keybind;
 					l = i;
 					return true;
@@ -242,9 +323,17 @@ class keybind_mode {
 			if(get_keybind_from_keybinds(seq, keybind_searched_for)) {
 				return false;
 			}
-			keybind_searched_for = new keybind_bind(seq, command);
+			bool is_valid_keybind;
+			keybind_searched_for = new keybind_bind(seq, command, is_valid_keybind);
+			if(!is_valid_keybind) {
+				delete keybind_searched_for;
+				return false;
+			}
 			keybinds.push_back(keybind_searched_for);
 			if(grabbed_keybind_mode == this) {
+				if(!chained) {
+					add_keybind_grab(keybind_searched_for->seq, keybind_searched_for->grabbed_key_n_modifiers);
+				}
 			}
 			return true;
 		}
@@ -274,6 +363,58 @@ bool add_to_modes(std::string mode_name, keybind_mode *&mode_searched_for) {
 	mode_searched_for = new keybind_mode(mode_name);
 	modes.push_back(mode_searched_for);
 	return true;
+}
+
+void delete_all_keybind_grabs() {
+	xcb_ungrab_key(xcb_conn, XCB_GRAB_ANY, root_window, XCB_BUTTON_MASK_ANY);
+	xcb_flush(xcb_conn); //may or may not need this line
+	for(keybind_grab *grab: grabbed_keys_n_modifiers) {
+		delete grab;
+	}
+	grabbed_keys_n_modifiers.clear();
+}
+
+void init_keybind_grabs() {
+	if(grabbed_keybind_mode == NULL) {
+		return;
+	}
+	delete_all_keybind_grabs();
+	for(keybind_bind *bind: grabbed_keybind_mode->keybinds) {
+		bind->seq.clear();
+		bind->seq.seekg(0);
+		bind->grabbed_key_n_modifiers = NULL;
+		add_keybind_grab(bind->seq, bind->grabbed_key_n_modifiers);
+	}
+}
+
+void update_grabs(unsigned char kc, unsigned short mods) {
+	keybind_grab *grab_searched_for;
+	for(keybind_grab *grab: grabbed_keys_n_modifiers) {
+		if(grab->keycode == kc && grab->mods == mods) {
+			grab_searched_for = grab;
+			break;
+		}
+	}
+	std::vector<keybind_bind *> binds;
+	for(keybind_bind *bind: grabbed_keybind_mode->keybinds) {
+		if(bind->grabbed_key_n_modifiers == grab_searched_for) {
+			if(bind->seq.eof()) {
+				system((bind->command + " &").c_str());
+				init_keybind_grabs();
+				return;
+			}
+			binds.push_back(bind);
+		}
+		else {
+			bind->seq.clear();
+			bind->seq.seekg(0);
+		}
+		bind->grabbed_key_n_modifiers == NULL;
+	}
+	delete_all_keybind_grabs();
+	for(keybind_bind *bind: binds) {
+		add_keybind_grab(bind->seq, bind->grabbed_key_n_modifiers);
+	}
 }
 
 int isdir(mode_t mode) {
@@ -476,7 +617,7 @@ bool add_operation(std::stringstream &p) {
 				}
 				else {
 					build_up_socket_string(std::string("err"));
-					build_up_socket_string(std::string("keybind already exists"));
+					build_up_socket_string(std::string("keybind already exists or was invalid in syntax"));
 				}
 			}
 			else {
@@ -529,6 +670,7 @@ bool set_operation(std::stringstream &p) {
 				}
 				if(is_option_parse_string(p, std::string("-g"))) {
 					grabbed_keybind_mode = set_operation_mode;
+					init_keybind_grabs();
 					build_up_socket_string(std::string("ok"));
 				}
 				else if(is_option_parse_string(p, std::string("-s"))) {
@@ -956,15 +1098,38 @@ int main(int argc, char *argv[]) {
 	signal(SIGINT, just_exit_normally);
 	signal(SIGHUP, just_exit_normally);
 	signal(SIGTERM, just_exit_normally);
-	struct pollfd socket_poll[1] = {{sockfd, POLLIN, 0}};
 	setup_xcb();
-	while(poll(socket_poll, 1, -1) > 0) {
-		clientfd = accept(sockfd, NULL, NULL);
-		std::stringstream client_message = read_from_socket();
-		socket_string = "";
-		add_operation(client_message) || remove_operation(client_message) || set_operation(client_message) || list_operation(client_message);
-		write_to_socket(socket_string);
-		close(clientfd);
+	struct pollfd socket_poll[2] = {
+		{sockfd, POLLIN, 0},
+		{xcb_fd, POLLIN, 0}
+	};
+	while(poll(socket_poll, 2, -1) > 0) {
+		if((socket_poll[0].revents & POLLIN) == POLLIN) {
+			clientfd = accept(sockfd, NULL, NULL);
+			std::stringstream client_message = read_from_socket();
+			socket_string = "";
+			add_operation(client_message) || remove_operation(client_message) || set_operation(client_message) || list_operation(client_message);
+			write_to_socket(socket_string);
+			close(clientfd);
+		}
+		else if((socket_poll[1].revents & POLLIN) == POLLIN) {
+			xcb_generic_event_t *event;
+			while ((event = xcb_poll_for_event(xcb_conn))) {
+				switch (event->response_type & ~0x80) {
+					case XCB_KEY_PRESS: {
+						xcb_key_press_event_t *button_event = (xcb_key_press_event_t *) event;
+						update_grabs(button_event->detail, button_event->state);
+						xcb_allow_events(xcb_conn, XCB_ALLOW_SYNC_KEYBOARD, XCB_CURRENT_TIME);
+						break;
+					}
+					default: {
+						break;
+					}
+				}
+			}
+			free(event);
+			xcb_flush(xcb_conn); //may or may not need this line
+		}
 	}
 	return 0;
 }

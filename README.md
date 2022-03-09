@@ -38,13 +38,8 @@ Set this daemon's selected mode to *MODE.*
 **-D,--deletefile**
 if set and socket file exists but is not an actual socket file then delete the file and recreate it as a socket, otherwise exit
 
-# NOTE
-
-Actual keybind functionality is soon to be added. Can current add, set, list and remove keybinds properties but not have the system actually register the keys.
-
 # TO DO
 
-- obviously add keybind functionality
 - add option to use inet in place of socket file
 - possibly add option to have keybinds registered on 1 device to trigger their command to be run on another device
 
