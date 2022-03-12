@@ -71,7 +71,7 @@ bool get_modifier_from_keycode(const unsigned char outside_keycode, unsigned sho
 			unsigned char *mod_keycodes = NULL;
 			mod_keycodes = xcb_get_modifier_mapping_keycodes(mod_mapping_reply);
 			if(mod_keycodes != NULL) {
-				unsigned int num_of_mods = xcb_get_modifier_mapping_keycodes_length(mod_mapping_reply);
+				unsigned int num_of_mods = xcb_get_modifier_mapping_keycodes_length(mod_mapping_reply) / kpm;
 				for(unsigned int i = 0; i < num_of_mods; i++) {
 					for(unsigned int j = 0; j < kpm; j++) {
 						unsigned char mod_keycode = mod_keycodes[i * kpm + j];
@@ -81,7 +81,6 @@ bool get_modifier_from_keycode(const unsigned char outside_keycode, unsigned sho
 						if(mod_keycode == outside_keycode) {
 							mod |= (1 << i);
 							success  = true;
-							break;
 						}
 					}
 				}
@@ -137,11 +136,18 @@ bool get_modifier_from_string(std::string key, unsigned short &mod) {
 		mod |= XCB_MOD_MASK_LOCK;
 		return true;
 	}
-	else if (key.compare("any") == 0) {
+	else if (key.compare("any mask") == 0) {
 		mod |= XCB_MOD_MASK_ANY;
 		return true;
 	}
-	return false;
+	else {
+		unsigned short mod_to_check = 0;
+		if(get_modifier_from_raw_keysym_string(key, mod_to_check)) {
+			mod |= mod_to_check;
+			return true;
+		}
+		return false;
+	}
 }
 
 class keybind_grab {
@@ -174,6 +180,14 @@ class keybind_grab {
 		}
 		bool operator==(keybind_grab &g) {
 			return mods == g.mods && keycode == g.keycode;
+		}
+		void bind() {
+			xcb_grab_key(xcb_conn, false, root_window, mods, keycode, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_SYNC);
+			xcb_flush(xcb_conn); //may or may not need this line
+		}
+		void unbind() {
+			xcb_ungrab_key(xcb_conn, keycode, root_window, mods);
+			xcb_flush(xcb_conn); //may or may not need this line
 		}
 };
 std::vector<keybind_grab *> grabbed_keys_n_modifiers;
@@ -217,33 +231,19 @@ class keybind_bind {
 			success = setup(bind_seq, bind_command, bind_description);
 		}
 		bool operator==(keybind_bind &o) {
-			std::streampos o_seg_pos = o.seq.tellg();
-			o.seq.seekg(0);
-			std::streampos t_seg_pos = seq.tellg();
-			seq.seekg(0);
 			bool success;
-			keybind_grab o_grab(o.seq, success);
-			keybind_grab t_grab(seq, success);
+			std::stringstream o_seq(o.seq.str());
+			std::stringstream t_seq(seq.str());
+			keybind_grab o_grab(o_seq, success);
+			keybind_grab t_grab(t_seq, success);
 			if(!(t_grab == o_grab)) {
-				o.seq.clear();
-				seq.clear();
-				o.seq.seekg(o_seg_pos);
-				seq.seekg(t_seg_pos);
 				return false;
 			}
-			while(o_grab.setup(o.seq) && t_grab.setup(seq)) {
+			while(o_grab.setup(o_seq) && t_grab.setup(t_seq)) {
 				if(!(t_grab == o_grab)) {
-					o.seq.clear();
-					seq.clear();
-					o.seq.seekg(o_seg_pos);
-					seq.seekg(t_seg_pos);
 					return false;
 				}
 			}
-			o.seq.clear();
-			seq.clear();
-			o.seq.seekg(o_seg_pos);
-			seq.seekg(t_seg_pos);
 			return true;
 		}
 };
@@ -272,6 +272,15 @@ bool add_keybind_grab(std::stringstream &seq, keybind_grab *&grab_searched_for) 
 	return true;
 }
 
+void delete_all_keybind_grabs() {
+	xcb_ungrab_key(xcb_conn, XCB_GRAB_ANY, root_window, XCB_BUTTON_MASK_ANY);
+	xcb_flush(xcb_conn); //may or may not need this line
+	for(keybind_grab *grab: grabbed_keys_n_modifiers) {
+		delete grab;
+	}
+	grabbed_keys_n_modifiers.clear();
+}
+
 class keybind_mode;
 keybind_mode *default_keybind_mode = NULL; //mode to set the 2 below to if the mode being deleted is one of them
 keybind_mode *grabbed_keybind_mode = NULL; //mode to grab keys off of it's keybinds member
@@ -286,6 +295,9 @@ class keybind_mode {
 			name = mode_name;
 		}
 		~keybind_mode() {
+			if(grabbed_keybind_mode == this) {
+				delete_all_keybind_grabs();
+			}
 			for(keybind_bind *bind: keybinds) {
 				delete bind;
 			}
@@ -337,6 +349,37 @@ class keybind_mode {
 			}
 			return true;
 		}
+		bool remove_a_keybind(std::string seq) {
+			keybind_bind *keybind_bind_to_remove = NULL;
+			int l;
+			if(get_keybind_from_keybinds(seq, keybind_bind_to_remove, l)) {
+				keybinds.erase(keybinds.begin() + l);
+				keybind_grab *removed_keybind_grab = keybind_bind_to_remove->grabbed_key_n_modifiers;
+				if(removed_keybind_grab == NULL) {
+					delete keybind_bind_to_remove;
+					return true;
+				}
+				for(keybind_bind *bind: keybinds) {
+					if(removed_keybind_grab == bind->grabbed_key_n_modifiers) {
+						delete keybind_bind_to_remove;
+						return true;
+					}
+				}
+				removed_keybind_grab->unbind();
+				for(int i = 0; i < (int) grabbed_keys_n_modifiers.size(); i++) {
+					if(grabbed_keys_n_modifiers.at(i) == removed_keybind_grab) {
+						grabbed_keys_n_modifiers.erase(grabbed_keys_n_modifiers.begin() + i);
+						break;
+					}
+				}
+				delete removed_keybind_grab;
+				delete keybind_bind_to_remove;
+				return true;
+			}
+			else {
+				return false;
+			}
+		}
 };
 
 bool get_mode_from_modes(std::string mode_name, keybind_mode *&mode_searched_for, int &l) {
@@ -365,19 +408,11 @@ bool add_to_modes(std::string mode_name, keybind_mode *&mode_searched_for) {
 	return true;
 }
 
-void delete_all_keybind_grabs() {
-	xcb_ungrab_key(xcb_conn, XCB_GRAB_ANY, root_window, XCB_BUTTON_MASK_ANY);
-	xcb_flush(xcb_conn); //may or may not need this line
-	for(keybind_grab *grab: grabbed_keys_n_modifiers) {
-		delete grab;
-	}
-	grabbed_keys_n_modifiers.clear();
-}
-
 void init_keybind_grabs() {
 	if(grabbed_keybind_mode == NULL) {
 		return;
 	}
+	chained = false;
 	delete_all_keybind_grabs();
 	for(keybind_bind *bind: grabbed_keybind_mode->keybinds) {
 		bind->seq.clear();
@@ -395,6 +430,7 @@ void update_grabs(unsigned char kc, unsigned short mods) {
 			break;
 		}
 	}
+	chained = true;
 	std::vector<keybind_bind *> binds;
 	for(keybind_bind *bind: grabbed_keybind_mode->keybinds) {
 		if(bind->grabbed_key_n_modifiers == grab_searched_for) {
@@ -836,6 +872,7 @@ bool remove_operation(std::stringstream &p) {
 		}
 	}
 	else if(is_option_parse_string(p, std::string("k")) || is_option_parse_string(p, std::string("keybind"))) {
+		remove_operation_mode = selected_keybind_mode;
 		if(is_option_parse_string(p, std::string("-g"))) {
 			remove_operation_mode  = grabbed_keybind_mode;
 		}
@@ -866,9 +903,7 @@ bool remove_operation(std::stringstream &p) {
 		}
 		if(parse_client_message(p, prop_of_mode_or_keybind)) {
 			keybind_bind *keybind_bind_to_remove = NULL;
-			if(remove_operation_mode->get_keybind_from_keybinds(prop_of_mode_or_keybind, keybind_bind_to_remove, l)) {
-				remove_operation_mode->keybinds.erase(remove_operation_mode->keybinds.begin() + l);
-				delete keybind_bind_to_remove;
+			if(remove_operation_mode->remove_a_keybind(prop_of_mode_or_keybind)) {
 				build_up_socket_string(std::string("ok"));
 			}
 			else {
