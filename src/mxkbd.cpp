@@ -267,8 +267,7 @@ bool add_keybind_grab(std::stringstream &seq, keybind_grab *&grab_searched_for) 
 	}
 	grab_searched_for = grab_from_seq;
 	grabbed_keys_n_modifiers.push_back(grab_from_seq);
-	xcb_grab_key(xcb_conn, false, root_window, grab_from_seq->mods, grab_from_seq->keycode, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_SYNC);
-	xcb_flush(xcb_conn); //may or may not need this line
+	grab_from_seq->bind();
 	return true;
 }
 

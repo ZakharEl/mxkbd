@@ -51,13 +51,18 @@ Currently the grabbed keys do not set back to the beginning of the currently gra
 
 - add option to use inet in place of socket file
 - possibly add option to have keybinds registered on 1 device to trigger their command to be run on another device
+- add caching mechanism to store not currently grabbed keybind modes off of ram and into hard disk to save on memory
 - add option to set default_keybind_mode, grabbed_keybind_mode and selected_keybind_mode to null, not delete them but set them to null
 - add option to set custom seperator for keybind_bind seq to something other than '+'
-- add option to have the keybinds reset to their beginning when something other than the next keybind portion is not pressed
+- add option to have the keybinds reset to their beginning when something other than the next keybind portion of any keybind is pressed
 - add functionality to have keybinds registered not only on keypress events but also key release events.
 - add functionality to list currently grabbed keybinds
 - add functionality to list the already pressed keys of a keybind
 - add functionality to list the not yet pressed keys of a keybind
+- add option to set a different delimitor than '\n' in the output sent to a client executing the list_operation
+- add option to have keybinds and keybind modes registor only to a given X window (only a given application)
+- add more comments in the C++ code for better documentation
+- perhaps split up the C++ code into multiple files
 
 # AUTHORS
 
