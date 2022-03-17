@@ -15,6 +15,10 @@ mxkbd - modular X key bind daemon - daemon to add, list, remove, and set keybind
 ![an example with the client mxkbc](media/key-grabbing-example.gif)
 Using the client **mxkbc** and pressing i followed by t to open alacritty in this example.
 
+# WHY MXKBD?
+
+It can be use to configure keybinding functionality independently of and portably accross different window managers, desktop environments and other programs. Unlike other keybind or hot key programs it doesn't use a config file but multiple appropriate **mxkbd** client program shell calls. This means 3 things. One, that **mxkbd** does not need to be restarted to make a change or changes - just run the appropriate **mxkbd** client shell commands. Two, the functionality of a config file can still be achieved by writing and using a shell script that in turn has **mxkbd** client program calls in it. Three, If a **mxkbd** client command is run using the wrong syntax then all keybinds of the **mxkbd** server are not loss with **mxkbd** crashing, instead the changes that would have been made by the offending **mxkbd** client command(s) are not done. Everything else will continue to work fine.
+
 # INSTALLATION
 
 Open a terminal and run
