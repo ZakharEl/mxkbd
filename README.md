@@ -69,7 +69,9 @@ Currently the grabbed keys do not set back to the beginning of the currently gra
 - add option to have keybinds and keybind modes registor only to a given X window (only a given application)
 - add more comments in the C++ code for better documentation
 - perhaps split up the C++ code into multiple files
-
+- add a password lock to block changes being made to modes and keybinds (adding, removal, etc) except from already added keybinds triggering said changes on a keypress
+	- should I make changing the grabbed mode and/or default mode blockable?
+	- should I make a mechanism to distinguish between changes made with a keybind and changes made with a mxkbd client command?
 # AUTHORS
 
 Written by Zachary Schlitt \<ztschlitt\@gmail.com>

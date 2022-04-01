@@ -17,6 +17,7 @@
 #include <xcb/xcb_keysyms.h> //xcb_key_symbols_t type, xcb_key_symbols_alloc, xcb_key_symbols_free, xcb_key_symbols_get_keysym - requires -l xcb option - also requires may require - xcb-keysyms option with the use of some variables, functions, etc
 #include <X11/Xlib.h> //XStringToKeysym, NoSymbol - requires -l X11 option
 #include <xcb/xcb_aux.h> //xcb_aux_get_screen - requires -l xcb-util option
+#include <cstdint> //std::uint32_t, std::uint8_t
 
 //stands for modular X key bind daemon
 
@@ -30,17 +31,18 @@ std::string socket_string("");
 xcb_connection_t *xcb_conn;
 xcb_window_t root_window;
 bool chained = false;
+bool ipc_message_error_free = true;
 
-bool get_keycode_from_keysym(const unsigned int keysym, unsigned char &outside_keycode) { //might need to replace keysym's unsigned int type with xcb_keysym_t to compile on some architectures
+bool get_keycode_from_keysym(const std::uint32_t keysym, std::uint8_t &outside_keycode) { //might need to replace keysym's std::uint32_t type with xcb_keysym_t to compile on some architectures
 	const xcb_setup_t *setup = xcb_get_setup(xcb_conn);
 	if(setup != NULL) {
 		xcb_key_symbols_t *symbols = xcb_key_symbols_alloc(xcb_conn); //requires -l xcb-keysyms - otherwise throws undefined reference error
-		unsigned char max_kc = setup->max_keycode; //might need to replace max_kc's unsigned char type with xcb_keycode_t to compile on some architectures
-		unsigned char kc = setup->min_keycode - 1;
+		std::uint8_t max_kc = setup->max_keycode; //might need to replace max_kc's std::uint8_t type with xcb_keycode_t to compile on some architectures
+		std::uint8_t kc = setup->min_keycode - 1;
 		do {
 			kc++;
-			for(unsigned char col = 0; col < 4; col++) {
-				unsigned int ks = xcb_key_symbols_get_keysym(symbols, kc, col);
+			for(std::uint8_t col = 0; col < 4; col++) {
+				std::uint32_t ks = xcb_key_symbols_get_keysym(symbols, kc, col);
 				if (ks == keysym) {
 					xcb_key_symbols_free(symbols);
 					outside_keycode = kc;
@@ -53,28 +55,28 @@ bool get_keycode_from_keysym(const unsigned int keysym, unsigned char &outside_k
 	return false;
 }
 
-bool get_keycode_from_string(std::string key, unsigned char &outside_keycode) {
-	const unsigned int keysym = XStringToKeysym(key.c_str()); //may need to be unsigned long (or x11 lib's KeySym type) as usigned int and unsigned long are not of the same length on all platforms
+bool get_keycode_from_string(std::string key, std::uint8_t &outside_keycode) {
+	const std::uint32_t keysym = XStringToKeysym(key.c_str()); //may need to be unsigned long (or x11 lib's KeySym type) as usigned int and unsigned long are not of the same length on all platforms
 	if (keysym == NoSymbol) {
 		return false;
 	}
 	return get_keycode_from_keysym(keysym, outside_keycode);
 }
 
-bool get_modifier_from_keycode(const unsigned char outside_keycode, unsigned short &mod) {
+bool get_modifier_from_keycode(const std::uint8_t outside_keycode, unsigned short &mod) {
 	bool success = false;
 	xcb_get_modifier_mapping_reply_t *mod_mapping_reply = NULL;
 	mod_mapping_reply = xcb_get_modifier_mapping_reply(xcb_conn, xcb_get_modifier_mapping(xcb_conn), NULL);
 	if(mod_mapping_reply != NULL) {
-		unsigned char kpm = mod_mapping_reply->keycodes_per_modifier;
+		std::uint8_t kpm = mod_mapping_reply->keycodes_per_modifier;
 		if(kpm > 0) {
-			unsigned char *mod_keycodes = NULL;
+			std::uint8_t *mod_keycodes = NULL;
 			mod_keycodes = xcb_get_modifier_mapping_keycodes(mod_mapping_reply);
 			if(mod_keycodes != NULL) {
-				unsigned int num_of_mods = xcb_get_modifier_mapping_keycodes_length(mod_mapping_reply) / kpm;
-				for(unsigned int i = 0; i < num_of_mods; i++) {
-					for(unsigned int j = 0; j < kpm; j++) {
-						unsigned char mod_keycode = mod_keycodes[i * kpm + j];
+				std::uint32_t num_of_mods = xcb_get_modifier_mapping_keycodes_length(mod_mapping_reply) / kpm;
+				for(std::uint32_t i = 0; i < num_of_mods; i++) {
+					for(std::uint32_t j = 0; j < kpm; j++) {
+						std::uint8_t mod_keycode = mod_keycodes[i * kpm + j];
 						if(mod_keycode == NoSymbol) {
 							continue;
 						}
@@ -92,7 +94,7 @@ bool get_modifier_from_keycode(const unsigned char outside_keycode, unsigned sho
 }
 
 bool get_modifier_from_raw_keysym_string(std::string key, unsigned short &mod) {
-	unsigned char mod_keycode;
+	std::uint8_t mod_keycode;
 	if(get_keycode_from_string(key, mod_keycode)) {
 		return get_modifier_from_keycode(mod_keycode, mod);
 	}
@@ -153,7 +155,7 @@ bool get_modifier_from_string(std::string key, unsigned short &mod) {
 class keybind_grab {
 	public:
 		unsigned short mods;
-		unsigned char keycode;
+		std::uint8_t keycode;
 		bool is_key_release;
 		bool setup(std::stringstream &seq) {
 			mods = 0;
@@ -421,7 +423,7 @@ void init_keybind_grabs() {
 	}
 }
 
-void update_grabs(unsigned char kc, unsigned short mods) {
+void update_grabs(std::uint8_t kc, unsigned short mods) {
 	keybind_grab *grab_searched_for;
 	for(keybind_grab *grab: grabbed_keys_n_modifiers) {
 		if(grab->keycode == kc && grab->mods == mods) {
@@ -581,6 +583,12 @@ bool is_option_parse_string(std::stringstream &p, std::string o) {
 }
 
 void write_to_socket(std::string write_string) {
+	if(ipc_message_error_free) {
+		write_string = "2 ok" + write_string;
+	}
+	else {
+		write_string = "3 err" + write_string;
+	}
 	if(write(clientfd, write_string.c_str(), write_string.length()) < 0) {
 		exit(-1);
 	}
@@ -602,15 +610,15 @@ bool add_operation(std::stringstream &p) {
 				if(parse_client_message(p, new_mode_prop)) {
 					new_mode->description = new_mode_prop;
 				}
-				build_up_socket_string(std::string("ok"));
+				ipc_message_error_free = true;
 			}
 			else {
-				build_up_socket_string(std::string("err"));
+				ipc_message_error_free = false;
 				build_up_socket_string(std::string("mode already exists"));
 			}
 		}
 		else {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("did not specify mode"));
 		}
 	}
@@ -629,14 +637,14 @@ bool add_operation(std::stringstream &p) {
 		else if(is_option_parse_string(p, std::string("-m"))) {
 			if(parse_client_message(p, prop_of_mode_or_keybind)) {
 				if(!get_mode_from_modes(prop_of_mode_or_keybind, mode_of_keybind)) {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("mode does not exist"));
 					return true;
 				}
 			}
 		}
 		if(mode_of_keybind == NULL) {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("mode is NULL"));
 			return true;
 		}
@@ -648,25 +656,25 @@ bool add_operation(std::stringstream &p) {
 					if(parse_client_message(p, prop_of_mode_or_keybind)) {
 						new_keybind_bind->description = prop_of_mode_or_keybind;
 					}
-					build_up_socket_string(std::string("ok"));
+					ipc_message_error_free = true;
 				}
 				else {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("keybind already exists or was invalid in syntax"));
 				}
 			}
 			else {
-				build_up_socket_string(std::string("err"));
+				ipc_message_error_free = false;
 				build_up_socket_string(std::string("did not specify keybind command"));
 			}
 		}
 		else {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("did not specify keybind key sequence"));
 		}
 	}
 	else {
-		build_up_socket_string(std::string("err"));
+		ipc_message_error_free = false;
 		build_up_socket_string(std::string("did not specify option"));
 	}
 	return true;
@@ -693,56 +701,56 @@ bool set_operation(std::stringstream &p) {
 	else if(is_option_parse_string(p, std::string("m")) || is_option_parse_string(p, std::string("mode"))) {
 		if(parse_client_message(p, prop_of_mode_or_keybind)) {
 			if(!get_mode_from_modes(prop_of_mode_or_keybind, set_operation_mode)) {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("mode does not exist"));
 					return true;
 			}
 			set_mode_member:
 				if(set_operation_mode == NULL) {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("mode is NULL"));
 					return true;
 				}
 				if(is_option_parse_string(p, std::string("-g"))) {
 					grabbed_keybind_mode = set_operation_mode;
 					init_keybind_grabs();
-					build_up_socket_string(std::string("ok"));
+					ipc_message_error_free = true;
 				}
 				else if(is_option_parse_string(p, std::string("-s"))) {
 					selected_keybind_mode = set_operation_mode;
-					build_up_socket_string(std::string("ok"));
+					ipc_message_error_free = true;
 				}
 				else if(is_option_parse_string(p, std::string("-d"))) {
 					default_keybind_mode = set_operation_mode;
-					build_up_socket_string(std::string("ok"));
+					ipc_message_error_free = true;
 				}
 				else if(is_option_parse_string(p, std::string("n")) || is_option_parse_string(p, std::string("name"))) {
 					if(parse_client_message(p, prop_of_mode_or_keybind)) {
 						set_operation_mode->name = prop_of_mode_or_keybind;
-						build_up_socket_string(std::string("ok"));
+						ipc_message_error_free = true;
 					}
 					else {
-						build_up_socket_string(std::string("err"));
+						ipc_message_error_free = false;
 						build_up_socket_string(std::string("did not specify new mode name"));
 					}
 				}
 				else if(is_option_parse_string(p, std::string("d")) || is_option_parse_string(p, std::string("description"))) {
 					if(parse_client_message(p, prop_of_mode_or_keybind)) {
 						set_operation_mode->description = prop_of_mode_or_keybind;
-						build_up_socket_string(std::string("ok"));
+						ipc_message_error_free = true;
 					}
 					else {
-						build_up_socket_string(std::string("err"));
+						ipc_message_error_free = false;
 						build_up_socket_string(std::string("did not specify mode description"));
 					}
 				}
 				else {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("did not specify what property of mode to set nor the 3 special keybind modes"));
 				}
 		}
 		else {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("did not specify mode"));
 		}
 	}
@@ -759,19 +767,19 @@ bool set_operation(std::stringstream &p) {
 		else if(is_option_parse_string(p, std::string("-m"))) {
 			if(parse_client_message(p, prop_of_mode_or_keybind)) {
 				if(!get_mode_from_modes(prop_of_mode_or_keybind, set_operation_mode)) {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("mode does not exist"));
 					return true;
 				}
 			}
 			else {
-				build_up_socket_string(std::string("err"));
+				ipc_message_error_free = false;
 				build_up_socket_string(std::string("did not specify mode"));
 				return true;
 			}
 		}
 		if(set_operation_mode == NULL) {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("mode is NULL"));
 			return true;
 		}
@@ -782,46 +790,46 @@ bool set_operation(std::stringstream &p) {
 					if(parse_client_message(p, prop_of_mode_or_keybind)) {
 						new_keybind_bind->seq.clear();
 						new_keybind_bind->seq.str(prop_of_mode_or_keybind);
-						build_up_socket_string(std::string("ok"));
+						ipc_message_error_free = true;
 					}
 					else {
-						build_up_socket_string(std::string("err"));
+						ipc_message_error_free = false;
 						build_up_socket_string(std::string("did not specify keybind key sequence"));
 					}
 				}
 				else if(is_option_parse_string(p, std::string("d")) || is_option_parse_string(p, std::string("description"))) {
 					if(parse_client_message(p, prop_of_mode_or_keybind)) {
 						new_keybind_bind->description = prop_of_mode_or_keybind;
-						build_up_socket_string(std::string("ok"));
+						ipc_message_error_free = true;
 					}
 					else {
-						build_up_socket_string(std::string("err"));
+						ipc_message_error_free = false;
 						build_up_socket_string(std::string("did not specify keybind description"));
 					}
 				}
 				else if(is_option_parse_string(p, std::string("c")) || is_option_parse_string(p, std::string("command"))) {
 					if(parse_client_message(p, prop_of_mode_or_keybind)) {
 						new_keybind_bind->command = prop_of_mode_or_keybind;
-						build_up_socket_string(std::string("ok"));
+						ipc_message_error_free = true;
 					}
 					else {
-						build_up_socket_string(std::string("err"));
+						ipc_message_error_free = false;
 						build_up_socket_string(std::string("did not specify keybind command"));
 					}
 				}
 			}
 			else {
-				build_up_socket_string(std::string("err"));
+				ipc_message_error_free = false;
 				build_up_socket_string(std::string("keybind key sequence does not exist"));
 			}
 		}
 		else {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("did not specify keybind key sequence"));
 		}
 	}
 	else {
-		build_up_socket_string(std::string("err"));
+		ipc_message_error_free = false;
 		build_up_socket_string(std::string("did not specify option"));
 	}
 	return true;
@@ -851,22 +859,22 @@ bool remove_operation(std::stringstream &p) {
 		if(parse_client_message(p, prop_of_mode_or_keybind)) {
 			remove_mode_member:
 				if(!get_mode_from_modes(prop_of_mode_or_keybind, remove_operation_mode, l)) {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("mode does not exist"));
 					return true;
 				}
 				if(remove_operation_mode == NULL) {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("mode is NULL"));
 				}
 				else {
 					modes.erase(modes.begin() + l);
 					delete remove_operation_mode;
-					build_up_socket_string(std::string("ok"));
+					ipc_message_error_free = true;
 				}
 		}
 		else {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("did not specify mode"));
 		}
 	}
@@ -884,39 +892,39 @@ bool remove_operation(std::stringstream &p) {
 		else if(is_option_parse_string(p, std::string("-m"))) {
 			if(parse_client_message(p, prop_of_mode_or_keybind)) {
 				if(!get_mode_from_modes(prop_of_mode_or_keybind, remove_operation_mode)) {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("mode does not exist"));
 					return true;
 				}
 			}
 			else {
-				build_up_socket_string(std::string("err"));
+				ipc_message_error_free = false;
 				build_up_socket_string(std::string("did not specify mode"));
 				return true;
 			}
 		}
 		if(remove_operation_mode == NULL) {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("mode is NULL"));
 			return true;
 		}
 		if(parse_client_message(p, prop_of_mode_or_keybind)) {
 			keybind_bind *keybind_bind_to_remove = NULL;
 			if(remove_operation_mode->remove_a_keybind(prop_of_mode_or_keybind)) {
-				build_up_socket_string(std::string("ok"));
+				ipc_message_error_free = true;
 			}
 			else {
-				build_up_socket_string(std::string("err"));
+				ipc_message_error_free = false;
 				build_up_socket_string(std::string("keybind key sequence does not exist"));
 			}
 		}
 		else {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("did not specify keybind key sequence"));
 		}
 	}
 	else {
-		build_up_socket_string(std::string("err"));
+		ipc_message_error_free = false;
 		build_up_socket_string(std::string("did not specify option"));
 	}
 	return true;
@@ -941,43 +949,43 @@ bool list_operation(std::stringstream &p) {
 		else if(is_option_parse_string(p, std::string("-m"))) {
 			if(parse_client_message(p, prop_of_mode_or_keybind)) {
 				if(!get_mode_from_modes(prop_of_mode_or_keybind, list_operation_mode)) {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("mode does not exist"));
 					return true;
 				}
 			}
 			else {
-				build_up_socket_string(std::string("err"));
+				ipc_message_error_free = false;
 				build_up_socket_string(std::string("did not specify mode"));
 				return true;
 			}
 		}
 		if(list_operation_mode == NULL) {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("mode is NULL"));
 			return true;
 		}
 		if(is_option_parse_string(p, std::string("-a"))) {
 			if(is_option_parse_string(p, std::string("d")) || is_option_parse_string(p, std::string("description"))) {
-				build_up_socket_string(std::string("ok"));
+				ipc_message_error_free = true;
 				for(keybind_bind *bind: list_operation_mode->keybinds) {
 					build_up_socket_string(bind->description);
 				}
 			}
 			else if(is_option_parse_string(p, std::string("c")) || is_option_parse_string(p, std::string("command"))) {
-				build_up_socket_string(std::string("ok"));
+				ipc_message_error_free = true;
 				for(keybind_bind *bind: list_operation_mode->keybinds) {
 					build_up_socket_string(bind->command);
 				}
 			}
 			else if(!parse_client_message(p, prop_of_mode_or_keybind)) {
-				build_up_socket_string(std::string("ok"));
+				ipc_message_error_free = true;
 				for(keybind_bind *bind: list_operation_mode->keybinds) {
 					build_up_socket_string(bind->seq.str());
 				}
 			}
 			else {
-				build_up_socket_string(std::string("err"));
+				ipc_message_error_free = false;
 				build_up_socket_string(std::string("did not specify correct option"));
 			}
 			return true;
@@ -987,19 +995,19 @@ bool list_operation(std::stringstream &p) {
 				keybind_bind *new_keybind_bind = NULL;
 				if(list_operation_mode->get_keybind_from_keybinds(prop_of_mode_or_keybind, new_keybind_bind)) {
 					if(is_option_parse_string(p, std::string("d")) || is_option_parse_string(p, std::string("description"))) {
-						build_up_socket_string(std::string("ok"));
+						ipc_message_error_free = true;
 						build_up_socket_string(new_keybind_bind->description);
 					}
 					else if(is_option_parse_string(p, std::string("c")) || is_option_parse_string(p, std::string("command"))) {
-						build_up_socket_string(std::string("ok"));
+						ipc_message_error_free = true;
 						build_up_socket_string(new_keybind_bind->command);
 					}
 					else if(!parse_client_message(p, prop_of_mode_or_keybind)) {
-						build_up_socket_string(std::string("ok"));
+						ipc_message_error_free = true;
 						build_up_socket_string(new_keybind_bind->seq.str());
 					}
 					else {
-						build_up_socket_string(std::string("err"));
+						ipc_message_error_free = false;
 						build_up_socket_string(std::string("did not specify correct option"));
 					}
 				}
@@ -1019,51 +1027,51 @@ bool list_operation(std::stringstream &p) {
 		else if(is_option_parse_string(p, std::string("m")) || is_option_parse_string(p, std::string("mode"))) {
 			if(parse_client_message(p, prop_of_mode_or_keybind)) {
 				if(!get_mode_from_modes(prop_of_mode_or_keybind, list_operation_mode)) {
-					build_up_socket_string(std::string("err"));
+					ipc_message_error_free = false;
 					build_up_socket_string(std::string("mode does not exist"));
 					return true;
 				}
 			}
 			else {
-				build_up_socket_string(std::string("err"));
+				ipc_message_error_free = false;
 				build_up_socket_string(std::string("did not specify mode"));
 				return true;
 			}
 		}
 		else if(is_option_parse_string(p, std::string("-a"))) {
 			if(is_option_parse_string(p, std::string("d")) || is_option_parse_string(p, std::string("description"))) {
-				build_up_socket_string(std::string("ok"));
+				ipc_message_error_free = true;
 				for(keybind_mode *mode: modes) {
 					build_up_socket_string(mode->description);
 				}
 			}
 			else if(!parse_client_message(p, prop_of_mode_or_keybind)) {
-				build_up_socket_string(std::string("ok"));
+				ipc_message_error_free = true;
 				for(keybind_mode *mode: modes) {
 					build_up_socket_string(mode->name);
 				}
 			}
 			else {
-				build_up_socket_string(std::string("err"));
+				ipc_message_error_free = false;
 				build_up_socket_string(std::string("did not specify correct option"));
 			}
 			return true;
 		}
 		if(list_operation_mode == NULL) {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("mode is NULL"));
 			return true;
 		}
 		if(is_option_parse_string(p, std::string("d")) || is_option_parse_string(p, std::string("description"))) {
-				build_up_socket_string(std::string("ok"));
+				ipc_message_error_free = true;
 				build_up_socket_string(list_operation_mode->description);
 		}
 		else if(!parse_client_message(p, prop_of_mode_or_keybind)) {
-				build_up_socket_string(std::string("ok"));
+				ipc_message_error_free = true;
 				build_up_socket_string(list_operation_mode->name);
 		}
 		else {
-			build_up_socket_string(std::string("err"));
+			ipc_message_error_free = false;
 			build_up_socket_string(std::string("did not specify option or keybind property"));
 		}
 	}
