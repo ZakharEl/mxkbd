@@ -81,43 +81,44 @@ bool get_keycode_from_keysym(const std::uint32_t keysym, std::uint8_t &outside_k
 	* get the keyboard setup.
 	*/
 	const xcb_setup_t *setup = xcb_get_setup(xcb_conn);
-	if (setup != NULL) {
-		/*
-		* get an array or table of keysyms or something like that I think.
-        * requires -l xcb-keysyms - otherwise throws undefined reference error.
-		*/
-		xcb_key_symbols_t *symbols = xcb_key_symbols_alloc(xcb_conn);
-		std::uint8_t max_kc = setup->max_keycode; //might need to replace max_kc's std::uint8_t type with xcb_keycode_t to compile on some architectures
-		std::uint8_t kc = setup->min_keycode - 1;
-		/*
-		* loop through all possible keycodes in search of the keycode that represents the keyboard button of the keysym.
-		* fail if the character, etc (keysym) doesn't actually exist on one's keyboard.
-		*/
-		do {
-			kc++;
-			for (std::uint8_t col = 0; col < 4; col++) {
-				/*
-				* search through 1 of 4 available keysyms of a given keycode .
-				*/
-				std::uint32_t ks = xcb_key_symbols_get_keysym(symbols, kc, col);
-				/*
-				* does this keysym match the one we are searching for?.
-				*/
-				if (ks == keysym) {
-					/*
-					* if so deallocate memory for the array/table/whatever of keysyms.
-					*/
-					xcb_key_symbols_free(symbols);
-					outside_keycode = kc;
-					return true;
-				}
-			}
-		} while(kc != max_kc);
-		/*
-		* deallocate memory for the array/table/whatever of keysyms.
-		*/
-		xcb_key_symbols_free(symbols);
+	if (setup == NULL) {
+		return false;
 	}
+	/*
+	* get an array or table of keysyms or something like that I think.
+    * requires -l xcb-keysyms - otherwise throws undefined reference error.
+	*/
+	xcb_key_symbols_t *symbols = xcb_key_symbols_alloc(xcb_conn);
+	std::uint8_t max_kc = setup->max_keycode; //might need to replace max_kc's std::uint8_t type with xcb_keycode_t to compile on some architectures
+	std::uint8_t kc = setup->min_keycode - 1;
+	/*
+	* loop through all possible keycodes in search of the keycode that represents the keyboard button of the keysym.
+	* fail if the character, etc (keysym) doesn't actually exist on one's keyboard.
+	*/
+	do {
+		kc++;
+		for (std::uint8_t col = 0; col < 4; col++) {
+			/*
+			* search through 1 of 4 available keysyms of a given keycode .
+			*/
+			std::uint32_t ks = xcb_key_symbols_get_keysym(symbols, kc, col);
+			/*
+			* does this keysym match the one we are searching for?.
+			*/
+			if (ks == keysym) {
+				/*
+				* if so deallocate memory for the array/table/whatever of keysyms.
+				*/
+				xcb_key_symbols_free(symbols);
+				outside_keycode = kc;
+				return true;
+			}
+		}
+	} while(kc != max_kc);
+	/*
+	* deallocate memory for the array/table/whatever of keysyms.
+	*/
+	xcb_key_symbols_free(symbols);
 	return false;
 }
 
@@ -568,33 +569,31 @@ class keybind_mode {
 		bool remove_a_keybind(std::string seq) {
 			keybind_bind *keybind_bind_to_remove = NULL;
 			int l;
-			if (get_keybind_from_keybinds(seq, keybind_bind_to_remove, l)) {
-				keybinds.erase(keybinds.begin() + l);
-				keybind_grab *removed_keybind_grab = keybind_bind_to_remove->grabbed_key_n_modifiers;
-				if (removed_keybind_grab == NULL) {
-					delete keybind_bind_to_remove;
-					return true;
-				}
-				for (keybind_bind *bind: keybinds) {
-					if (removed_keybind_grab == bind->grabbed_key_n_modifiers) {
-						delete keybind_bind_to_remove;
-						return true;
-					}
-				}
-				removed_keybind_grab->unbind();
-				for (int i = 0; i < (int) grabbed_keys_n_modifiers.size(); i++) {
-					if (grabbed_keys_n_modifiers.at(i) == removed_keybind_grab) {
-						grabbed_keys_n_modifiers.erase(grabbed_keys_n_modifiers.begin() + i);
-						break;
-					}
-				}
-				delete removed_keybind_grab;
+			if (!get_keybind_from_keybinds(seq, keybind_bind_to_remove, l)) {
+				return false;
+			}
+			keybinds.erase(keybinds.begin() + l);
+			keybind_grab *removed_keybind_grab = keybind_bind_to_remove->grabbed_key_n_modifiers;
+			if (removed_keybind_grab == NULL) {
 				delete keybind_bind_to_remove;
 				return true;
 			}
-			else {
-				return false;
+			for (keybind_bind *bind: keybinds) {
+				if (removed_keybind_grab == bind->grabbed_key_n_modifiers) {
+					delete keybind_bind_to_remove;
+					return true;
+				}
 			}
+			removed_keybind_grab->unbind();
+			for (int i = 0; i < (int) grabbed_keys_n_modifiers.size(); i++) {
+				if (grabbed_keys_n_modifiers.at(i) == removed_keybind_grab) {
+					grabbed_keys_n_modifiers.erase(grabbed_keys_n_modifiers.begin() + i);
+					break;
+				}
+			}
+			delete removed_keybind_grab;
+			delete keybind_bind_to_remove;
+			return true;
 		}
 };
 
@@ -729,20 +728,17 @@ void create_dir(std::string &dir) {
 
 bool file_of_type_setup(std::string &file, int (*is_file_of_type)(mode_t mode), void (*create_file_of_type)(std::string &filepath)) { //return true if file already exists, otherwise return false
 	struct stat sb;
-	if (stat(file.c_str(), &sb) == 0) { //check if file exists
-		if (!is_file_of_type(sb.st_mode)) { //check if file isn't of type
-			if (!delete_file || remove(file.c_str()) != 0) { //delete file that isn't of type if delete_file is true otherwise exit
-				exit(1); //exit with failure if file can't be deleted
-			}
-			create_file_of_type(file); //create file of type after if it was deleted as a result of not being of type
-		}
-		else {
-			return true;
-		}
-	}
-	else {
+	if (!stat(file.c_str(), &sb) == 0) { //check if file does not exists
 		create_file_of_type(file); //create file of type as it doesn't exist
+		return false;
 	}
+	if (is_file_of_type(sb.st_mode)) { //check if file is of type
+		return true;
+	}
+	if (!delete_file || remove(file.c_str()) != 0) { //delete file that isn't of type if delete_file is true otherwise exit
+		exit(1); //exit with failure if file can't be deleted
+	}
+	create_file_of_type(file); //create file of type after if it was deleted as a result of not being of type
 	return false;
 }
 
@@ -934,12 +930,10 @@ bool add_operation(std::stringstream &p) {
 			mode_of_keybind = default_keybind_mode;
 		}
 		else if (is_option_parse_string(p, std::string("-m"))) {
-			if (parse_client_message(p, prop_of_mode_or_keybind)) {
-				if (!get_mode_from_modes(prop_of_mode_or_keybind, mode_of_keybind)) {
-					ipc_message_error_free = false;
-					build_up_socket_string(std::string("mode does not exist"));
-					return true;
-				}
+			if (parse_client_message(p, prop_of_mode_or_keybind) && !get_mode_from_modes(prop_of_mode_or_keybind, mode_of_keybind)) {
+				ipc_message_error_free = false;
+				build_up_socket_string(std::string("mode does not exist"));
+				return true;
 			}
 		}
 		if (mode_of_keybind == NULL) {
